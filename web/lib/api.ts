@@ -1,21 +1,31 @@
 // API configuration and utility functions
 
-// Get API base URL from environment variable.
-// The launcher injects NEXT_PUBLIC_API_BASE from the canonical project-root `.env`.
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE ||
-  (() => {
-    if (typeof window !== "undefined") {
-      console.error("NEXT_PUBLIC_API_BASE is not set.");
-      console.error(
-        "Please configure NEXT_PUBLIC_API_BASE in your environment and restart the application.",
-      );
-      console.error("Run python scripts/start_tour.py to rebuild your local setup if needed.");
-    }
-    throw new Error(
-      "NEXT_PUBLIC_API_BASE is not configured. Please set it in your environment and restart.",
-    );
-  })();
+/**
+ * Get the API base URL dynamically based on current host
+ * This ensures both localhost and network IP access work correctly
+ */
+function getApiBaseUrl(): string {
+  // If running on server-side (SSR), use environment variable
+  if (typeof window === "undefined") {
+    return process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8001";
+  }
+
+  // On client-side, detect current host and construct API URL
+  const currentHost = window.location.hostname;
+  const currentPort = window.location.port;
+  
+  // If accessing via localhost, use localhost for API
+  if (currentHost === "localhost" || currentHost === "127.0.0.1") {
+    return "http://localhost:8001";
+  }
+  
+  // If accessing via network IP, use the same IP for API
+  // This handles cases like http://192.168.1.4:3782
+  return `http://${currentHost}:8001`;
+}
+
+// Get API base URL - dynamic detection for client-side, env var for server-side
+export const API_BASE_URL = getApiBaseUrl();
 
 /**
  * Construct a full API URL from a path
