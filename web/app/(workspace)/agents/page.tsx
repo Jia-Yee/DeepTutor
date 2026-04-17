@@ -206,12 +206,21 @@ function BotsTab({
           model: formModel.trim() || undefined,
         }),
       });
-      if (res.ok) {
-        onToast(`${formName.trim()} created`);
-        setShowCreate(false);
-        resetForm();
-        await onReload();
+      
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error("Create bot failed:", res.status, errorText);
+        onToast(`Failed to create bot: ${res.status} ${errorText}`);
+        return;
       }
+      
+      onToast(`${formName.trim()} created`);
+      setShowCreate(false);
+      resetForm();
+      await onReload();
+    } catch (error) {
+      console.error("Create bot error:", error);
+      onToast(`Network error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setCreating(false);
     }
