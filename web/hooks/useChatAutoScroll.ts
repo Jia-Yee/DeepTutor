@@ -71,7 +71,13 @@ export function useChatAutoScroll({
         pendingRafRef.current = 0;
       }
     };
-  }, [isStreaming, lastEventCount, lastMessageContent, messageCount, scrollToBottom]);
+  }, [
+    isStreaming,
+    lastEventCount,
+    lastMessageContent,
+    messageCount,
+    scrollToBottom,
+  ]);
 
   useEffect(() => {
     if (!hasMessages || !shouldAutoScrollRef.current) return;
@@ -84,19 +90,30 @@ export function useChatAutoScroll({
   // After streaming ends, dynamically-loaded components (e.g. MathAnimatorViewer
   // via next/dynamic) may render and grow the content height. Detect that and
   // scroll to bottom so the user can see the full result.
+  //
+  // This observer used to run for the entire lifetime of the conversation,
+  // which meant any post-stream DOM change — including the user expanding a
+  // trace `<details>` row to read it — was treated as "new content arrived"
+  // and pulled the user back to the bottom. We now gate it to a short window
+  // right after `isStreaming` flips false, which is when late-mounting
+  // dynamic components actually settle.
+  const POST_STREAM_AUTOSCROLL_WINDOW_MS = 4000;
   useEffect(() => {
     if (isStreaming) return;
+    if (!hasMessages) return;
 
     const container = containerRef.current;
     if (!container) return;
 
     let prevHeight = container.scrollHeight;
     let rafId = 0;
+    const deadline = performance.now() + POST_STREAM_AUTOSCROLL_WINDOW_MS;
 
     const check = () => {
       if (rafId) return;
       rafId = requestAnimationFrame(() => {
         rafId = 0;
+        if (performance.now() > deadline) return;
         const curHeight = container.scrollHeight;
         if (curHeight > prevHeight && shouldAutoScrollRef.current) {
           scrollToBottom("instant");
@@ -107,12 +124,17 @@ export function useChatAutoScroll({
 
     const mo = new MutationObserver(check);
     mo.observe(container, { childList: true, subtree: true });
+    const stopTimer = window.setTimeout(() => {
+      mo.disconnect();
+      if (rafId) cancelAnimationFrame(rafId);
+    }, POST_STREAM_AUTOSCROLL_WINDOW_MS);
 
     return () => {
+      window.clearTimeout(stopTimer);
       mo.disconnect();
       if (rafId) cancelAnimationFrame(rafId);
     };
-  }, [isStreaming, scrollToBottom]);
+  }, [hasMessages, isStreaming, scrollToBottom]);
 
   const handleScroll = useCallback(() => {
     const container = containerRef.current;

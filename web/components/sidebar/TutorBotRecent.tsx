@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Bot } from "lucide-react";
-import { apiUrl } from "@/lib/api";
+import { useTranslation } from "react-i18next";
+import { apiFetch, apiUrl } from "@/lib/api";
+import { formatRelativeTime } from "@/lib/relative-time";
 
 interface RecentBot {
   bot_id: string;
@@ -13,25 +14,15 @@ interface RecentBot {
   updated_at: string;
 }
 
-function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h`;
-  const days = Math.floor(hrs / 24);
-  return `${days}d`;
-}
-
 export function TutorBotRecent({ collapsed = false }: { collapsed?: boolean }) {
+  const { i18n } = useTranslation();
   const [bots, setBots] = useState<RecentBot[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(apiUrl("/api/v1/tutorbot/recent?limit=3"));
+        const res = await apiFetch(apiUrl("/api/v1/tutorbot/recent?limit=3"));
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled) setBots(data);
@@ -39,30 +30,14 @@ export function TutorBotRecent({ collapsed = false }: { collapsed?: boolean }) {
         /* ignore */
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   if (bots.length === 0) return null;
 
-  if (collapsed) {
-    return (
-      <div className="flex flex-col items-center gap-0.5 pb-0.5 pt-px">
-        {bots.map((bot) => (
-          <Link
-            key={bot.bot_id}
-            href={`/agents/${bot.bot_id}/chat`}
-            title={bot.name}
-            className="relative rounded-md p-1.5 text-[var(--muted-foreground)]/70 transition-colors hover:bg-[var(--background)]/50 hover:text-[var(--foreground)]"
-          >
-            <Bot size={12} strokeWidth={1.5} />
-            {bot.running && (
-              <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-emerald-400 ring-1 ring-[var(--secondary)]" />
-            )}
-          </Link>
-        ))}
-      </div>
-    );
-  }
+  if (collapsed) return null;
 
   return (
     <div className="ml-5 border-l border-[var(--border)]/30 py-1">
@@ -83,7 +58,10 @@ export function TutorBotRecent({ collapsed = false }: { collapsed?: boolean }) {
             {bot.name}
           </span>
           <span className="shrink-0 text-[10px] tabular-nums text-[var(--muted-foreground)]/40">
-            {relativeTime(bot.updated_at)}
+            {formatRelativeTime(
+              Math.floor(new Date(bot.updated_at).getTime() / 1000),
+              i18n.language,
+            )}
           </span>
         </Link>
       ))}

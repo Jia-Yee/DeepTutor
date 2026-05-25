@@ -16,17 +16,6 @@ from deeptutor.services.llm import client as llm_client_module
 from deeptutor.services.llm import config as llm_config_module
 
 
-class _DummyLogger:
-    def debug(self, *_args, **_kwargs) -> None:
-        pass
-
-    def error(self, *_args, **_kwargs) -> None:
-        pass
-
-    def info(self, *_args, **_kwargs) -> None:
-        pass
-
-
 class _FakeEmbeddingAdapter:
     def __init__(self, config: dict[str, Any]):
         self.config = config
@@ -46,21 +35,11 @@ class _FakeCatalogService:
     def load(self) -> dict[str, Any]:
         return deepcopy(self._catalog)
 
-    def apply(self, catalog: dict[str, Any]) -> dict[str, str]:
+    def apply(self, catalog: dict[str, Any]) -> dict[str, Any]:
         current = self.save(catalog)
-        llm_profile = current["services"]["llm"]["profiles"][0]
-        llm_model = llm_profile["models"][0]
-        embedding_profile = current["services"]["embedding"]["profiles"][0]
-        embedding_model = embedding_profile["models"][0]
         return {
-            "LLM_BINDING": llm_profile["binding"],
-            "LLM_API_KEY": llm_profile["api_key"],
-            "LLM_HOST": llm_profile["base_url"],
-            "LLM_MODEL": llm_model["model"],
-            "EMBEDDING_BINDING": embedding_profile["binding"],
-            "EMBEDDING_API_KEY": embedding_profile["api_key"],
-            "EMBEDDING_HOST": embedding_profile["base_url"],
-            "EMBEDDING_MODEL": embedding_model["model"],
+            "catalog_path": "memory://model_catalog.json",
+            "services": list(current["services"]),
         }
 
 
@@ -134,12 +113,6 @@ def _patch_runtime(
     service: _FakeCatalogService,
 ) -> None:
     monkeypatch.setattr(settings_router, "get_model_catalog_service", lambda: service)
-    monkeypatch.setattr(llm_client_module, "get_logger", lambda *_args, **_kwargs: _DummyLogger())
-    monkeypatch.setattr(
-        embedding_client_module,
-        "get_logger",
-        lambda *_args, **_kwargs: _DummyLogger(),
-    )
     monkeypatch.setattr(
         embedding_client_module,
         "_resolve_adapter_class",
@@ -196,6 +169,39 @@ def _patch_runtime(
     )
 
 
+def test_embedding_provider_choices_use_full_endpoint_urls() -> None:
+    embedding = {item["value"]: item for item in settings_router._provider_choices()["embedding"]}
+
+    assert embedding["openrouter"]["base_url"] == "https://openrouter.ai/api/v1/embeddings"
+    assert embedding["ollama"]["base_url"] == "http://localhost:11434/api/embed"
+    assert embedding["openai"]["base_url"] == "https://api.openai.com/v1/embeddings"
+    assert "custom_openai_sdk" not in embedding
+
+
+@pytest.mark.asyncio
+async def test_get_llm_options_returns_redacted_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    catalog = _build_catalog(
+        llm_model="gpt-4o-mini",
+        llm_base_url="https://llm.example/v1",
+        llm_api_key="secret-key",
+        embedding_model="text-embedding-3-small",
+        embedding_base_url="https://emb.example/v1/embeddings",
+        embedding_api_key="emb-key",
+    )
+    service = _FakeCatalogService(catalog)
+    monkeypatch.setattr(settings_router, "get_model_catalog_service", lambda: service)
+
+    response = await settings_router.get_llm_options()
+
+    assert response["active"] == {
+        "profile_id": "llm-profile-default",
+        "model_id": "llm-model-default",
+    }
+    assert response["options"][0]["model"] == "gpt-4o-mini"
+    assert "api_key" not in response["options"][0]
+    assert "base_url" not in response["options"][0]
+
+
 @pytest.fixture(autouse=True)
 def _reset_runtime_state() -> None:
     llm_config_module.clear_llm_config_cache()
@@ -214,7 +220,7 @@ async def test_update_catalog_invalidates_runtime_caches(monkeypatch: pytest.Mon
         llm_base_url="https://old-llm.example/v1",
         llm_api_key="old-llm-key",
         embedding_model="text-embedding-old",
-        embedding_base_url="https://old-embedding.example/v1",
+        embedding_base_url="https://old-embedding.example/v1/embeddings",
         embedding_api_key="old-embedding-key",
     )
     updated_catalog = _build_catalog(
@@ -222,7 +228,7 @@ async def test_update_catalog_invalidates_runtime_caches(monkeypatch: pytest.Mon
         llm_base_url="https://new-llm.example/v1",
         llm_api_key="new-llm-key",
         embedding_model="text-embedding-new",
-        embedding_base_url="https://new-embedding.example/v1",
+        embedding_base_url="https://new-embedding.example/v1/embeddings",
         embedding_api_key="new-embedding-key",
     )
     service = _FakeCatalogService(initial_catalog)
@@ -249,7 +255,7 @@ async def test_update_catalog_invalidates_runtime_caches(monkeypatch: pytest.Mon
     assert new_llm_client.config.model == "gpt-new"
     assert new_embedding_client is not old_embedding_client
     assert new_embedding_client.config.model == "text-embedding-new"
-    assert new_embedding_client.config.base_url == "https://new-embedding.example/v1"
+    assert new_embedding_client.config.base_url == "https://new-embedding.example/v1/embeddings"
 
 
 @pytest.mark.asyncio
@@ -259,7 +265,7 @@ async def test_apply_catalog_invalidates_runtime_caches(monkeypatch: pytest.Monk
         llm_base_url="https://before-apply-llm.example/v1",
         llm_api_key="before-apply-llm-key",
         embedding_model="text-embedding-before-apply",
-        embedding_base_url="https://before-apply-embedding.example/v1",
+        embedding_base_url="https://before-apply-embedding.example/v1/embeddings",
         embedding_api_key="before-apply-embedding-key",
     )
     applied_catalog = _build_catalog(
@@ -267,7 +273,7 @@ async def test_apply_catalog_invalidates_runtime_caches(monkeypatch: pytest.Monk
         llm_base_url="https://after-apply-llm.example/v1",
         llm_api_key="after-apply-llm-key",
         embedding_model="text-embedding-after-apply",
-        embedding_base_url="https://after-apply-embedding.example/v1",
+        embedding_base_url="https://after-apply-embedding.example/v1/embeddings",
         embedding_api_key="after-apply-embedding-key",
     )
     service = _FakeCatalogService(initial_catalog)
@@ -286,13 +292,38 @@ async def test_apply_catalog_invalidates_runtime_caches(monkeypatch: pytest.Monk
     new_embedding_client = embedding_client_module.get_embedding_client()
 
     assert response["catalog"] == applied_catalog
-    assert response["env"]["LLM_MODEL"] == "gpt-after-apply"
-    assert response["env"]["EMBEDDING_MODEL"] == "text-embedding-after-apply"
+    assert response["runtime"]["catalog_path"]
     assert new_llm_config.model == "gpt-after-apply"
     assert new_llm_client is not old_llm_client
     assert new_llm_client.config.base_url == "https://after-apply-llm.example/v1"
     assert new_embedding_client is not old_embedding_client
     assert new_embedding_client.config.model == "text-embedding-after-apply"
+
+
+@pytest.mark.asyncio
+async def test_enabled_tools_roundtrip(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    settings_file = tmp_path / "interface.json"
+    monkeypatch.setattr(settings_router, "_settings_file", lambda: settings_file)
+
+    # Default state — no file yet, so the loader emits the full toggleable set.
+    assert set(settings_router.get_enabled_optional_tools()) == set(
+        settings_router.USER_TOGGLEABLE_TOOL_NAMES
+    )
+
+    # PUT a partial set; unknown tool names get filtered out.
+    update = settings_router.EnabledToolsUpdate(
+        enabled_tools=["web_search", "reason", "not_a_real_tool"]
+    )
+    response = await settings_router.update_enabled_tools(update)
+    assert response == {"enabled_optional_tools": ["web_search", "reason"]}
+    assert settings_router.get_enabled_optional_tools() == ["web_search", "reason"]
+
+    # Empty selection is a valid "all off" state.
+    response = await settings_router.update_enabled_tools(
+        settings_router.EnabledToolsUpdate(enabled_tools=[])
+    )
+    assert response == {"enabled_optional_tools": []}
+    assert settings_router.get_enabled_optional_tools() == []
 
 
 @pytest.mark.asyncio
@@ -304,7 +335,7 @@ async def test_complete_tour_invalidates_runtime_caches(
         llm_base_url="https://before-tour-llm.example/v1",
         llm_api_key="before-tour-llm-key",
         embedding_model="text-embedding-before-tour",
-        embedding_base_url="https://before-tour-embedding.example/v1",
+        embedding_base_url="https://before-tour-embedding.example/v1/embeddings",
         embedding_api_key="before-tour-embedding-key",
     )
     completed_catalog = _build_catalog(
@@ -312,7 +343,7 @@ async def test_complete_tour_invalidates_runtime_caches(
         llm_base_url="https://after-tour-llm.example/v1",
         llm_api_key="after-tour-llm-key",
         embedding_model="text-embedding-after-tour",
-        embedding_base_url="https://after-tour-embedding.example/v1",
+        embedding_base_url="https://after-tour-embedding.example/v1/embeddings",
         embedding_api_key="after-tour-embedding-key",
     )
     service = _FakeCatalogService(initial_catalog)
@@ -335,8 +366,7 @@ async def test_complete_tour_invalidates_runtime_caches(
     new_embedding_client = embedding_client_module.get_embedding_client()
     cache = tour_cache.read_text(encoding="utf-8")
 
-    assert response["env"]["LLM_MODEL"] == "gpt-after-tour"
-    assert response["env"]["EMBEDDING_MODEL"] == "text-embedding-after-tour"
+    assert response["runtime"]["catalog_path"]
     assert response["status"] == "completed"
     assert new_llm_config.model == "gpt-after-tour"
     assert new_llm_client is not old_llm_client
